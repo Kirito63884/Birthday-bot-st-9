@@ -9,7 +9,7 @@ import random
 
 # ------------------ НАСТРОЙКИ ------------------
 TOKEN = 'СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН'  # Вставь свой токен
-CHANNEL_ID = 1546509618480549910# ID канала для поздравлений
+CHANNEL_ID = 1546906175751192706# ID канала для поздравлений
 TIMEZONE = pytz.timezone('Europe/Moscow')
 DATA_FILE = 'birthdays.json'  # Файл будет в папке с ботом
 # ----------------------------------------------
@@ -237,46 +237,100 @@ async def my_birthday(interaction: discord.Interaction):
 
 @bot.tree.command(name="list_bd", description="Показать все дни рождения")
 async def list_birthdays(interaction: discord.Interaction):
-    data = load_data()
-    if not data:
-        embed = discord.Embed(title="📭 Список пуст", description="Добавьте ДР с помощью `/add_bd`!", color=COLORS['info'])
-        await interaction.response.send_message(embed=embed)
-        return
+    # Сразу говорим Discord: "Я обрабатываю, подожди"
+    await interaction.response.defer()
     
-    sorted_users = sorted(data.items(), key=lambda x: x[1]['date'])
-    months = {'01': 'Январь', '02': 'Февраль', '03': 'Март', '04': 'Апрель',
-              '05': 'Май', '06': 'Июнь', '07': 'Июль', '08': 'Август',
-              '09': 'Сентябрь', '10': 'Октябрь', '11': 'Ноябрь', '12': 'Декабрь'}
-    
-    description = "🎂 **Список всех дней рождений:**\n\n"
-    current_month = None
-    
-    for user_id, info in sorted_users:
-        date_parts = info['date'].split('.')
-        month = date_parts[1]
-        day = date_parts[0]
-        year = date_parts[2]
+    try:
+        data = load_data()
         
-        if month != current_month:
-            current_month = month
-            description += f"\n**📅 {months[month]}:**\n"
+        if not data:
+            embed = discord.Embed(
+                title="📭 Список пуст",
+                description="Добавьте ДР с помощью `/add_bd`!",
+                color=COLORS['info']
+            )
+            await interaction.followup.send(embed=embed)
+            return
         
-        try:
-            user = await bot.fetch_user(int(user_id))
-            name = user.mention
-        except:
-            name = f"~~{info['name']}~~ *(покинул сервер)*"
+        # Сортируем по дате
+        sorted_users = sorted(data.items(), key=lambda x: x[1]['date'])
         
-        description += f"  • {int(day)} число — {name} ({year} г.)\n"
-    
-    embed = discord.Embed(
-        title="📅 Календарь дней рождений",
-        description=description,
-        color=COLORS['info'],
-        timestamp=datetime.now(TIMEZONE)
-    )
-    embed.set_footer(text=f"Всего: {len(data)} именинников")
-    await interaction.response.send_message(embed=embed)
+        months = {
+            '01': 'Январь', '02': 'Февраль', '03': 'Март', '04': 'Апрель',
+            '05': 'Май', '06': 'Июнь', '07': 'Июль', '08': 'Август',
+            '09': 'Сентябрь', '10': 'Октябрь', '11': 'Ноябрь', '12': 'Декабрь'
+        }
+        
+        # Собираем список в массив, чтобы потом разбить на части
+        lines = []
+        current_month = None
+        
+        for user_id, info in sorted_users:
+            date_parts = info['date'].split('.')
+            month = date_parts[1]
+            day = date_parts[0]
+            year = date_parts[2]
+            
+            # Добавляем заголовок месяца
+            if month != current_month:
+                current_month = month
+                lines.append(f"\n**📅 {months[month]}:**")
+            
+            # Получаем имя пользователя
+            try:
+                user = await bot.fetch_user(int(user_id))
+                name = user.mention
+            except:
+                name = f"~~{info['name']}~~ *(покинул сервер)*"
+            
+            lines.append(f"  • {int(day)} число — {name} ({year} г.)")
+        
+        # Склеиваем всё в одно сообщение
+        full_text = "🎂 **Список всех дней рождений:**\n\n" + "\n".join(lines)
+        
+        # Если текст слишком длинный (больше 4000 символов) — разбиваем на части
+        if len(full_text) > 4000:
+            # Отправляем первую часть
+            first_part = full_text[:3997] + "... (продолжение ниже)"
+            embed = discord.Embed(
+                title="📅 Календарь дней рождений (часть 1)",
+                description=first_part,
+                color=COLORS['info'],
+                timestamp=datetime.now(TIMEZONE)
+            )
+            embed.set_footer(text=f"Всего: {len(data)} именинников")
+            await interaction.followup.send(embed=embed)
+            
+            # Отправляем остальные части
+            remaining = full_text[3997:]
+            chunk_number = 2
+            
+            while remaining:
+                chunk = remaining[:3997]
+                remaining = remaining[3997:]
+                
+                embed = discord.Embed(
+                    title=f"📅 Календарь дней рождений (часть {chunk_number})",
+                    description=chunk,
+                    color=COLORS['info'],
+                    timestamp=datetime.now(TIMEZONE)
+                )
+                await interaction.followup.send(embed=embed)
+                chunk_number += 1
+        else:
+            # Если всё помещается — отправляем одним сообщением
+            embed = discord.Embed(
+                title="📅 Календарь дней рождений",
+                description=full_text,
+                color=COLORS['info'],
+                timestamp=datetime.now(TIMEZONE)
+            )
+            embed.set_footer(text=f"Всего: {len(data)} именинников")
+            await interaction.followup.send(embed=embed)
+            
+    except Exception as e:
+        print(f"❌ Ошибка в list_bd: {e}")
+        await interaction.followup.send("❌ Произошла ошибка при загрузке списка. Попробуй позже.")
 
 @bot.tree.command(name="age", description="Узнать возраст пользователя")
 @app_commands.describe(user="Пользователь (оставь пустым для себя)")
