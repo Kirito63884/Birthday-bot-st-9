@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -9,9 +10,9 @@ import random
 
 # ------------------ НАСТРОЙКИ ------------------
 TOKEN = 'СЮДА_ВСТАВЬ_СВОЙ_ТОКЕН'  # Вставь свой токен
-CHANNEL_ID = 1546906175751192706# ID канала для поздравлений
+CHANNEL_ID = 123456789012345678  # ID канала для поздравлений
 TIMEZONE = pytz.timezone('Europe/Moscow')
-DATA_FILE = 'birthdays.json'  # Файл будет в папке с ботом
+DATA_FILE = 'birthdays.json'
 # ----------------------------------------------
 
 intents = discord.Intents.default()
@@ -114,7 +115,9 @@ def get_birthday_embed(user, date, action='add'):
             "Исполнения всех желаний! ✨",
             "Много улыбок и радости! 😊",
             "Пусть всё задуманное сбудется! 🌟",
-            "Любви, добра и удачи! 💖"
+            "Любви, добра и удачи! 💖",
+            "Пусть каждый день приносит радость! 🌈",
+            "Будь счастлив(а) каждый день! 💫"
         ]
         
         embed = discord.Embed(
@@ -141,7 +144,7 @@ def get_birthday_embed(user, date, action='add'):
         embed.set_footer(text=f"🎊 С наилучшими пожеланиями от бота! • {age_text}")
         return embed
 
-# ------------------ КОМАНДЫ ------------------
+# ------------------ КОМАНДА ПОМОЩИ ------------------
 @bot.tree.command(name="bd_help", description="Показать все команды бота для дней рождения")
 async def bd_help(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -174,6 +177,31 @@ async def bd_help(interaction: discord.Interaction):
     embed.set_footer(text="💡 Используй / (слеш) для вызова команд")
     await interaction.response.send_message(embed=embed)
 
+# ------------------ ПРЕФИКСНАЯ КОМАНДА ПОМОЩИ ------------------
+@bot.command(name='bothelp')
+async def prefix_help(ctx):
+    embed = discord.Embed(
+        title="🎯 **Помощь по боту дней рождения**",
+        description="Вот список всех доступных команд:",
+        color=COLORS['help'],
+        timestamp=datetime.now(TIMEZONE)
+    )
+    embed.add_field(
+        name="📝 **Основные команды:**",
+        value="""
+        `/add_bd <дата> [пользователь]` — Добавить день рождения (ДД.ММ.ГГГГ)
+        `/remove_bd [пользователь]` — Удалить день рождения
+        `/my_bd` — Показать мой день рождения
+        `/age [пользователь]` — Узнать возраст
+        `/list_bd` — Показать список всех ДР
+        `/bd_help` — Показать это сообщение
+        """,
+        inline=False
+    )
+    embed.set_footer(text="💡 Используй / (слеш) для вызова команд")
+    await ctx.send(embed=embed)
+
+# ------------------ СЛЕШ-КОМАНДЫ ------------------
 @bot.tree.command(name="add_bd", description="Добавить день рождения")
 @app_commands.describe(
     date="Дата в формате ДД.ММ.ГГГГ (например, 15.07.2000)",
@@ -186,16 +214,82 @@ async def add_birthday(interaction: discord.Interaction, date: str, user: discor
     try:
         datetime.strptime(date, '%d.%m.%Y')
     except ValueError:
-        embed = discord.Embed(title="❌ Ошибка!", description="Неверный формат! Используй ДД.ММ.ГГГГ", color=COLORS['error'])
+        embed = discord.Embed(
+            title="❌ Ошибка!",
+            description="Неверный формат! Используй ДД.ММ.ГГГГ\nПример: `15.07.2000`",
+            color=COLORS['error']
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    day, month, year = map(int, date.split('.'))
+    current_year = datetime.now(TIMEZONE).year
+    if year > current_year:
+        embed = discord.Embed(
+            title="❌ Ошибка!",
+            description="Год рождения не может быть в будущем!",
+            color=COLORS['error']
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    if day > 31 or month > 12:
+        embed = discord.Embed(
+            title="❌ Ошибка!",
+            description="Неверная дата! Проверь день и месяц.",
+            color=COLORS['error']
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
     data = load_data()
-    data[str(user.id)] = {"name": user.display_name, "date": date}
+    user_id = str(user.id)
+    
+    if user_id in data:
+        embed = discord.Embed(
+            title="⚠️ Предупреждение",
+            description=f"День рождения для **{user.display_name}** уже есть в базе!\nДата: `{data[user_id]['date']}`",
+            color=COLORS['warning']
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    
+    data[user_id] = {"name": user.display_name, "date": date}
     save_data(data)
     
     embed = get_birthday_embed(user, date, 'add')
     await interaction.response.send_message(embed=embed)
+    
+    # Проверка: если сегодня ДР — поздравить через 5 минут
+    today = datetime.now(TIMEZONE).strftime('%d.%m')
+    date_parts = date.split('.')
+    date_check = f"{date_parts[0]}.{date_parts[1]}"
+    
+    if date_check == today:
+        await interaction.followup.send("⏳ Сегодня день рождения! Проверю через 5 минут...")
+        asyncio.create_task(delayed_birthday_check(user, date, interaction))
+
+async def delayed_birthday_check(user: discord.User, date: str, interaction: discord.Interaction):
+    """Отложенная проверка через 5 минут"""
+    await asyncio.sleep(300)
+    
+    today = datetime.now(TIMEZONE).strftime('%d.%m')
+    date_parts = date.split('.')
+    date_check = f"{date_parts[0]}.{date_parts[1]}"
+    
+    if date_check != today:
+        await interaction.followup.send("ℹ️ День рождения уже прошёл или ещё не наступил.")
+        return
+    
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        await interaction.followup.send("❌ Не удалось найти канал для поздравлений!")
+        return
+    
+    embed = get_birthday_embed(user, date, 'birthday')
+    await channel.send(f"🎉 ВНИМАНИЕ! {user.mention}", embed=embed)
+    await interaction.followup.send("✅ Поздравление отправлено в канал!")
+    print(f"🎉 Отложенное поздравление отправлено для {user.display_name}")
 
 @bot.tree.command(name="remove_bd", description="Удалить день рождения")
 @app_commands.describe(user="Пользователь (оставь пустым для себя)")
@@ -206,7 +300,11 @@ async def remove_birthday(interaction: discord.Interaction, user: discord.User =
     data = load_data()
     user_id = str(user.id)
     if user_id not in data:
-        embed = discord.Embed(title="❌ Ошибка!", description=f"День рождения для **{user.display_name}** не найден.", color=COLORS['error'])
+        embed = discord.Embed(
+            title="❌ Ошибка!",
+            description=f"День рождения для **{user.display_name}** не найден.",
+            color=COLORS['error']
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
@@ -217,27 +315,47 @@ async def remove_birthday(interaction: discord.Interaction, user: discord.User =
 
 @bot.tree.command(name="my_bd", description="Показать мой день рождения")
 async def my_birthday(interaction: discord.Interaction):
-    data = load_data()
-    user_id = str(interaction.user.id)
-    if user_id not in data:
-        embed = discord.Embed(title="❌ Не найден", description="Твой ДР не добавлен!", color=COLORS['error'])
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+    await interaction.response.defer()
     
-    date = data[user_id]['date']
-    age, age_text = calculate_age(date)
-    embed = discord.Embed(
-        title="🎂 Твой день рождения",
-        description=f"📅 День рождения: **{date}**\n🎈 Возраст: **{age_text}**",
-        color=COLORS['info'],
-        timestamp=datetime.now(TIMEZONE)
-    )
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    await interaction.response.send_message(embed=embed)
+    try:
+        data = load_data()
+        user_id = str(interaction.user.id)
+        
+        if user_id not in data:
+            embed = discord.Embed(
+                title="❌ Не найден",
+                description="Твой ДР не добавлен! Используй `/add_bd`",
+                color=COLORS['error']
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        date = data[user_id]['date']
+        age, age_text = calculate_age(date)
+        
+        day, month, year = date.split('.')
+        months = {'01': 'января', '02': 'февраля', '03': 'марта', '04': 'апреля',
+                  '05': 'мая', '06': 'июня', '07': 'июля', '08': 'августа',
+                  '09': 'сентября', '10': 'октября', '11': 'ноября', '12': 'декабря'}
+        date_formatted = f"{int(day)} {months[month]} {year} года"
+        
+        embed = discord.Embed(
+            title="🎂 Твой день рождения",
+            description=f"📅 День рождения: **{date_formatted}**\n🎈 Возраст: **{age_text}**",
+            color=COLORS['info'],
+            timestamp=datetime.now(TIMEZONE)
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_footer(text="🎉 Готовься к празднику!")
+        
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        print(f"❌ Ошибка в my_bd: {e}")
+        await interaction.followup.send("❌ Произошла ошибка. Попробуй позже.")
 
 @bot.tree.command(name="list_bd", description="Показать все дни рождения")
 async def list_birthdays(interaction: discord.Interaction):
-    # Сразу говорим Discord: "Я обрабатываю, подожди"
     await interaction.response.defer()
     
     try:
@@ -252,46 +370,38 @@ async def list_birthdays(interaction: discord.Interaction):
             await interaction.followup.send(embed=embed)
             return
         
-        # Сортируем по дате
-        sorted_users = sorted(data.items(), key=lambda x: x[1]['date'])
-        
         months = {
             '01': 'Январь', '02': 'Февраль', '03': 'Март', '04': 'Апрель',
             '05': 'Май', '06': 'Июнь', '07': 'Июль', '08': 'Август',
             '09': 'Сентябрь', '10': 'Октябрь', '11': 'Ноябрь', '12': 'Декабрь'
         }
         
-        # Собираем список в массив, чтобы потом разбить на части
-        lines = []
+        # 🔥 СОРТИРОВКА: сначала по месяцу, потом по дню
+        def sort_key(item):
+            date = item[1]['date']  # ДД.ММ.ГГГГ
+            day, month, year = date.split('.')
+            return (int(month), int(day))
+        
+        sorted_users = sorted(data.items(), key=sort_key)
+        
+        description = "🎂 **Список всех дней рождений:**\n"
         current_month = None
         
         for user_id, info in sorted_users:
             date_parts = info['date'].split('.')
-            month = date_parts[1]
             day = date_parts[0]
+            month = date_parts[1]
             year = date_parts[2]
             
-            # Добавляем заголовок месяца
             if month != current_month:
                 current_month = month
-                lines.append(f"\n**📅 {months[month]}:**")
+                description += f"\n**📅 {months[month]}:**\n"
             
-            # Получаем имя пользователя
-            try:
-                user = await bot.fetch_user(int(user_id))
-                name = user.mention
-            except:
-                name = f"~~{info['name']}~~ *(покинул сервер)*"
-            
-            lines.append(f"  • {int(day)} число — {name} ({year} г.)")
+            name = info['name']
+            description += f"  • {int(day)} число — {name} ({year} г.)\n"
         
-        # Склеиваем всё в одно сообщение
-        full_text = "🎂 **Список всех дней рождений:**\n\n" + "\n".join(lines)
-        
-        # Если текст слишком длинный (больше 4000 символов) — разбиваем на части
-        if len(full_text) > 4000:
-            # Отправляем первую часть
-            first_part = full_text[:3997] + "... (продолжение ниже)"
+        if len(description) > 4000:
+            first_part = description[:3997] + "..."
             embed = discord.Embed(
                 title="📅 Календарь дней рождений (часть 1)",
                 description=first_part,
@@ -301,8 +411,7 @@ async def list_birthdays(interaction: discord.Interaction):
             embed.set_footer(text=f"Всего: {len(data)} именинников")
             await interaction.followup.send(embed=embed)
             
-            # Отправляем остальные части
-            remaining = full_text[3997:]
+            remaining = description[3997:]
             chunk_number = 2
             
             while remaining:
@@ -318,10 +427,9 @@ async def list_birthdays(interaction: discord.Interaction):
                 await interaction.followup.send(embed=embed)
                 chunk_number += 1
         else:
-            # Если всё помещается — отправляем одним сообщением
             embed = discord.Embed(
                 title="📅 Календарь дней рождений",
-                description=full_text,
+                description=description,
                 color=COLORS['info'],
                 timestamp=datetime.now(TIMEZONE)
             )
@@ -335,32 +443,55 @@ async def list_birthdays(interaction: discord.Interaction):
 @bot.tree.command(name="age", description="Узнать возраст пользователя")
 @app_commands.describe(user="Пользователь (оставь пустым для себя)")
 async def get_age(interaction: discord.Interaction, user: discord.User = None):
-    if user is None:
-        user = interaction.user
+    await interaction.response.defer()
     
-    data = load_data()
-    user_id = str(user.id)
-    if user_id not in data:
-        embed = discord.Embed(title="❌ Не найден", description=f"ДР для **{user.display_name}** не добавлен!", color=COLORS['error'])
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
-    
-    date = data[user_id]['date']
-    age, age_text = calculate_age(date)
-    
-    embed = discord.Embed(
-        title=f"🎂 Возраст {user.display_name}",
-        description=f"📅 День рождения: **{date}**\n🎈 Возраст: **{age_text}**",
-        color=COLORS['info'],
-        timestamp=datetime.now(TIMEZONE)
-    )
-    embed.set_thumbnail(url=user.display_avatar.url)
-    await interaction.response.send_message(embed=embed)
+    try:
+        if user is None:
+            user = interaction.user
+        
+        data = load_data()
+        user_id = str(user.id)
+        
+        if user_id not in data:
+            embed = discord.Embed(
+                title="❌ Не найден",
+                description=f"ДР для **{user.display_name}** не добавлен!",
+                color=COLORS['error']
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        date = data[user_id]['date']
+        age, age_text = calculate_age(date)
+        
+        day, month, year = date.split('.')
+        months = {'01': 'января', '02': 'февраля', '03': 'марта', '04': 'апреля',
+                  '05': 'мая', '06': 'июня', '07': 'июля', '08': 'августа',
+                  '09': 'сентября', '10': 'октября', '11': 'ноября', '12': 'декабря'}
+        date_formatted = f"{int(day)} {months[month]} {year} года"
+        
+        embed = discord.Embed(
+            title=f"🎂 Возраст {user.display_name}",
+            description=f"📅 День рождения: **{date_formatted}**\n🎈 Возраст: **{age_text}**",
+            color=COLORS['info'],
+            timestamp=datetime.now(TIMEZONE)
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        print(f"❌ Ошибка в age: {e}")
+        await interaction.followup.send("❌ Произошла ошибка. Попробуй позже.")
 
 @bot.tree.command(name="force_check", description="Принудительная проверка именинников (только для админов)")
 async def force_check(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        embed = discord.Embed(title="⛔ Доступ запрещён", description="Только администраторы!", color=COLORS['error'])
+        embed = discord.Embed(
+            title="⛔ Доступ запрещён",
+            description="Только администраторы!",
+            color=COLORS['error']
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     
@@ -379,6 +510,28 @@ async def ping(interaction: discord.Interaction):
         timestamp=datetime.now(TIMEZONE)
     )
     await interaction.response.send_message(embed=embed)
+
+# ------------------ АВТОУДАЛЕНИЕ УШЕДШИХ ------------------
+@bot.event
+async def on_member_remove(member):
+    data = load_data()
+    user_id = str(member.id)
+    
+    if user_id in data:
+        del data[user_id]
+        save_data(data)
+        print(f"🗑️ {member.display_name} покинул сервер — ДР удалён из базы")
+        
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(
+                title="👋 Пользователь покинул сервер",
+                description=f"**{member.display_name}** покинул сервер.\nЕго день рождения автоматически удалён из базы.",
+                color=COLORS['warning'],
+                timestamp=datetime.now(TIMEZONE)
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            await channel.send(embed=embed)
 
 # ------------------ АВТОПОЗДРАВЛЕНИЕ ------------------
 @tasks.loop(time=datetime.strptime('09:00', '%H:%M').time())
@@ -427,6 +580,27 @@ async def check_birthdays():
     else:
         print("📭 Именинников сегодня нет")
     
+    # Проверка на завтрашних именинников
+    tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime('%d.%m')
+    for user_id, info in data.items():
+        date_parts = info['date'].split('.')
+        date_check = f"{date_parts[0]}.{date_parts[1]}"
+        
+        if date_check == tomorrow:
+            try:
+                user = await bot.fetch_user(int(user_id))
+                embed = discord.Embed(
+                    title="⏰ Напоминание!",
+                    description=f"Завтра день рождения у **{user.display_name}** ({user.mention})!\nНе забудьте поздравить! 🎂",
+                    color=COLORS['warning'],
+                    timestamp=datetime.now(TIMEZONE)
+                )
+                embed.set_thumbnail(url=user.display_avatar.url)
+                await channel.send(embed=embed)
+                print(f"⏰ Напоминание отправлено для {user.display_name} (завтра ДР)")
+            except:
+                pass
+    
     print("✅ Проверка завершена!")
 
 # ------------------ ЗАПУСК БОТА ------------------
@@ -438,14 +612,15 @@ async def on_ready():
     try:
         synced = await bot.tree.sync()
         print(f'✅ Синхронизировано {len(synced)} слеш-команд!')
+        print('📋 Доступные команды:')
+        for cmd in synced:
+            print(f'  • /{cmd.name} — {cmd.description}')
     except Exception as e:
         print(f'❌ Ошибка синхронизации: {e}')
     
-    # Запускаем ежедневную проверку
     check_birthdays.start()
     print('✅ Ежедневная проверка запущена!')
     
-    # Проверяем именинников СРАЗУ при запуске
     await check_birthdays()
     print('✅ Первичная проверка выполнена!')
 
